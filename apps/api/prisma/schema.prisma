@@ -1,0 +1,218 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  ORGANIZER
+  ARBITER
+  PLAYER
+}
+
+enum TournamentFormat {
+  SWISS
+  ROUND_ROBIN
+  KNOCKOUT
+}
+
+enum TournamentStatus {
+  DRAFT
+  REGISTRATION
+  IN_PROGRESS
+  FINISHED
+  CANCELLED
+}
+
+enum RoundStatus {
+  PENDING
+  IN_PROGRESS
+  FINISHED
+}
+
+enum GameResult {
+  WHITE_WINS
+  BLACK_WINS
+  DRAW
+  FORFEIT_WHITE
+  FORFEIT_BLACK
+  DOUBLE_FORFEIT
+  IN_PROGRESS
+}
+
+enum GameTermination {
+  CHECKMATE
+  RESIGNATION
+  TIMEOUT
+  STALEMATE
+  INSUFFICIENT_MATERIAL
+  THREEFOLD_REPETITION
+  FIFTY_MOVE_RULE
+  AGREEMENT
+  FORFEIT
+}
+
+enum BracketSide {
+  UPPER
+  LOWER
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role     @default(PLAYER)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  player      Player?
+  tournaments Tournament[]
+
+  @@map("users")
+}
+
+model Player {
+  id         String   @id @default(uuid())
+  userId     String   @unique @map("user_id")
+  fullName   String   @map("full_name")
+  fideId     String?  @unique @map("fide_id")
+  eloRating  Int      @default(1200) @map("elo_rating")
+  federation String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tournamentPlayers   TournamentPlayer[]
+
+  @@map("players")
+}
+
+model Tournament {
+  id                   String           @id @default(uuid())
+  organizerId          String           @map("organizer_id")
+  name                 String
+  description          String?
+  format               TournamentFormat
+  status               TournamentStatus @default(DRAFT)
+  maxPlayers           Int              @map("max_players")
+  numRounds            Int              @map("num_rounds")
+  timeControlMinutes   Int              @map("time_control_minutes")
+  timeIncrementSeconds Int              @default(0) @map("time_increment_seconds")
+  startDate            DateTime?        @map("start_date")
+  endDate              DateTime?        @map("end_date")
+  createdAt            DateTime         @default(now()) @map("created_at")
+
+  organizer          User                @relation(fields: [organizerId], references: [id])
+  tournamentPlayers  TournamentPlayer[]
+  rounds             Round[]
+  swissPairingConfig SwissPairingConfig?
+  knockoutBracket    KnockoutBracket?
+
+  @@map("tournaments")
+}
+
+model TournamentPlayer {
+  id              String   @id @default(uuid())
+  tournamentId    String   @map("tournament_id")
+  playerId        String   @map("player_id")
+  seed            Int?
+  initialRating   Int      @map("initial_rating")
+  score           Float    @default(0)
+  buchholz        Float    @default(0)
+  sonnebornBerger Float    @default(0) @map("sonneborn_berger")
+  rank            Int?
+  registeredAt    DateTime @default(now()) @map("registered_at")
+
+  tournament   Tournament    @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  player       Player        @relation(fields: [playerId], references: [id])
+  gamesAsWhite Game[]        @relation("WhitePlayer")
+  gamesAsBlack Game[]        @relation("BlackPlayer")
+  bracketSlots BracketSlot[]
+
+  @@unique([tournamentId, playerId])
+  @@map("tournament_players")
+}
+
+model Round {
+  id           String      @id @default(uuid())
+  tournamentId String      @map("tournament_id")
+  roundNumber  Int         @map("round_number")
+  status       RoundStatus @default(PENDING)
+  startsAt     DateTime?   @map("starts_at")
+  endsAt       DateTime?   @map("ends_at")
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  games      Game[]
+
+  @@unique([tournamentId, roundNumber])
+  @@map("rounds")
+}
+
+model Game {
+  id                      String           @id @default(uuid())
+  roundId                 String           @map("round_id")
+  tournamentPlayerWhiteId String           @map("tournament_player_white_id")
+  tournamentPlayerBlackId String?          @map("tournament_player_black_id")
+  result                  GameResult       @default(IN_PROGRESS)
+  termination             GameTermination?
+  pgn                     String?
+  movesCount              Int?             @map("moves_count")
+  startedAt               DateTime?        @map("started_at")
+  endedAt                 DateTime?        @map("ended_at")
+
+  round                Round            @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  tournamentPlayerWhite TournamentPlayer @relation("WhitePlayer", fields: [tournamentPlayerWhiteId], references: [id])
+  tournamentPlayerBlack TournamentPlayer? @relation("BlackPlayer", fields: [tournamentPlayerBlackId], references: [id])
+  bracketSlot           BracketSlot?
+
+  @@map("games")
+}
+
+model SwissPairingConfig {
+  id            String  @id @default(uuid())
+  tournamentId  String  @unique @map("tournament_id")
+  pairingSystem String  @default("DUTCH") @map("pairing_system")
+  accelerated   Boolean @default(false)
+  byeScoreHalf  Boolean @default(true) @map("bye_score_half")
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  @@map("swiss_pairing_configs")
+}
+
+model KnockoutBracket {
+  id                  String  @id @default(uuid())
+  tournamentId        String  @unique @map("tournament_id")
+  totalRounds         Int     @map("total_rounds")
+  hasThirdPlaceMatch  Boolean @default(false) @map("has_third_place_match")
+  doubleElimination   Boolean @default(false) @map("double_elimination")
+
+  tournament    Tournament    @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  bracketSlots  BracketSlot[]
+
+  @@map("knockout_brackets")
+}
+
+model BracketSlot {
+  id             String      @id @default(uuid())
+  bracketId      String      @map("bracket_id")
+  gameId         String?     @unique @map("game_id")
+  bracketRound   Int         @map("bracket_round")
+  position       Int
+  side           BracketSide @default(UPPER)
+  winnerTpId     String?     @map("winner_tp_id")
+
+  bracket  KnockoutBracket   @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  game     Game?             @relation(fields: [gameId], references: [id])
+  winner   TournamentPlayer? @relation(fields: [winnerTpId], references: [id])
+
+  @@unique([bracketId, bracketRound, position, side])
+  @@map("bracket_slots")
+}
